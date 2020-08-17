@@ -19,6 +19,24 @@ miot_token="MY TOKEN";
 
 q = Queue(maxsize=100)
 
+def dumpclean(obj):
+	if type(obj) == dict:
+		print("It is a DICT")
+		for k, v in obj.items():
+			if hasattr(v, '__iter__'):
+				print(k)
+				dumpclean(v)
+			else:
+				print('%s : %s' % (k, v))
+	elif type(obj) == list:
+		for v in obj:
+			if hasattr(v, '__iter__'):
+				dumpclean(v)
+			else:
+				print(v)
+	else:
+		print(obj)
+
 
 
 #define callback
@@ -99,10 +117,15 @@ client.subscribe(mqtt_prefix+"indicator")#subscribe
 
 count_idle_messages=0
 count_interval_messages=0
-interval_messages=10
 
-ap=miio.Device(ip=miot_broker, token=miot_token)
+# 6 seconds between set and get commands (time for value to be updated)
+interval_messages=60
 
+miot_retry=0
+
+ap=miio.Device(ip=miot_broker, token=miot_token, lazy_discover=True)
+# miio old ap.do_discover()
+ap.send_handshake()
 
 while True:
 	while not q.empty() and count_interval_messages==0:
@@ -110,38 +133,44 @@ while True:
 		# req : topic , miio_msg
 		req=q.get();
 		print("Sending: "+str(req[1])+ " - "+str(req[2]))
-		try:
-			ret=ap.raw_command(req[1], req[2]);
-			ret=ret[0]
-			if req[1]=="get_properties":
-				val=ret["value"]
-				if req[0]=="fanspeed":
-					if val==1:
-						val="LOW"
-					if val==2:
-						val="MEDIUM"
-					if val==3:
-						val="HIGH"
-				if req[0]=="delay":
-					val="{:d}".format(val);
-				if req[0]=="mode":
-					if val==0:
-						val="AUTO"
-					if val==1:
-						val="SLEEP"
-				if req[0]=="power" or req[0]=="childlock" or req[0]=="rotate" or req[0]=="sound" or req[0]=="indicator":
-					if val==1 or val==True or val=="True" or val=="true" or val=="TRUE":
-						val="ON"
-					else:
-						val="OFF"
-				client.publish(mqtt_prefix+req[0]+"/state",val)
-				print("Publishing: "+mqtt_prefix+req[0]+"/state",val)
-			if req[1]=="set_properties":
-				client.publish(mqtt_prefix+req[0]+"/result",ret["code"])
-				print("Publishing: "+mqtt_prefix+req[0]+"/return",ret["code"])
-			count_interval_messages=interval_messages
-		except Exception as e:
-			print("No valid reply! Bad request?")
+		miot_retry=3
+		while miot_retry>0:
+		    try:
+			    ap._discovered = True
+			    ret=ap.raw_command(req[1], req[2]);
+			    ret=ret[0]
+			    if req[1]=="get_properties":
+				    val=ret["value"]
+				    if req[0]=="fanspeed":
+					    if val==1:
+						    val="LOW"
+					    if val==2:
+						    val="MEDIUM"
+					    if val==3:
+						    val="HIGH"
+				    if req[0]=="delay":
+					    val="{:d}".format(val);
+				    if req[0]=="mode":
+					    if val==0:
+						    val="AUTO"
+					    if val==1:
+						    val="SLEEP"
+				    if req[0]=="power" or req[0]=="childlock" or req[0]=="rotate" or req[0]=="sound" or req[0]=="indicator":
+					    if val==1 or val==True or val=="True" or val=="true" or val=="TRUE":
+						    val="ON"
+					    else:
+						    val="OFF"
+				    client.publish(mqtt_prefix+req[0]+"/state",val)
+				    print("Publishing: "+mqtt_prefix+req[0]+"/state",val)
+			    if req[1]=="set_properties":
+				    client.publish(mqtt_prefix+req[0]+"/result",ret["code"])
+				    print("Publishing: "+mqtt_prefix+req[0]+"/return",ret["code"])
+				    count_interval_messages=interval_messages
+			    miot_retry=0
+		    except Exception as e:
+			    print("No valid reply! Bad request?")
+			    miot_retry=miot_retry-1
+			    time.sleep(0.500)
 #	print("Waiting...")
 	time.sleep(0.100);
 	count_idle_messages=count_idle_messages+1;
